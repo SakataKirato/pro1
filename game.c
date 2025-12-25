@@ -1,6 +1,18 @@
 #include "raylib.h"
 #include <math.h>
 
+typedef struct Ripple {
+  Vector2 pos;
+  float age;
+} Ripple;
+
+static void AddRipple(Ripple *ripples, int maxRipples, int *nextIndex,
+                      Vector2 pos) {
+  ripples[*nextIndex].pos = pos;
+  ripples[*nextIndex].age = 0.0f;
+  *nextIndex = (*nextIndex + 1) % maxRipples;
+}
+
 static bool SegmentHitsCircle(Vector2 a, Vector2 b, Vector2 center,
                               float radius, Vector2 *hitPoint) {
   Vector2 d = {b.x - a.x, b.y - a.y};
@@ -82,14 +94,25 @@ int main(void) {
   const float beamSpeed = 1200.0f;
   Vector2 beamDir = {1.0f, 0.0f};
   bool goalCleared = false;
+  const float rippleDuration = 0.5f;
+  const float rippleMinRadius = 6.0f;
+  const float rippleMaxRadius = 28.0f;
+  const int maxRipples = 16;
+  Ripple ripples[16];
+  int rippleNext = 0;
 
   Sound clickSound = LoadSound("決定ボタンを押す2.mp3");
+  Sound wallHitSound = LoadSound("カーソル移動12.mp3");
   const float hueSpeed = 100.0f;         // degrees per second for hue shift
   const float transitionDuration = 0.6f; // seconds
   bool inGame = false;
   bool transitioning = false;
   bool fadeOut = true;
   float transitionAlpha = 0.0f;
+
+  for (int i = 0; i < maxRipples; i++) {
+    ripples[i].age = -1.0f;
+  }
 
   while (!WindowShouldClose()) {
     Vector2 mouse = GetMousePosition();
@@ -226,6 +249,7 @@ int main(void) {
 
       if (beamTimer > 0.0f) {
         beamTimer -= dt;
+        float prevProgress = beamProgress;
         beamProgress += beamSpeed * dt;
         if (beamProgress > beamLength)
           beamProgress = beamLength;
@@ -240,6 +264,7 @@ int main(void) {
           dir.y /= dirLen;
           Vector2 pos = playerPos;
           float remaining = beamProgress;
+          float traveled = 0.0f;
           const float xMin = (float)wallThickness;
           const float xMax = (float)(screenWidth - wallThickness);
           const float yMin = (float)wallThickness;
@@ -278,10 +303,16 @@ int main(void) {
             }
 
             remaining -= segment;
+            traveled += segment;
             if (segment < tHit - 0.0001f)
               break;
 
             pos = hitPos;
+            float hitDist = traveled;
+            if (hitDist > prevProgress && hitDist <= beamProgress) {
+              AddRipple(ripples, maxRipples, &rippleNext, hitPos);
+              PlaySound(wallHitSound);
+            }
             if (tX < tY)
               dir.x = -dir.x;
             else
@@ -290,6 +321,24 @@ int main(void) {
             bounces++;
           }
         }
+      }
+
+      for (int i = 0; i < maxRipples; i++) {
+        if (ripples[i].age < 0.0f)
+          continue;
+        ripples[i].age += dt;
+        float t = ripples[i].age / rippleDuration;
+        if (t >= 1.0f) {
+          ripples[i].age = -1.0f;
+          continue;
+        }
+        float radius =
+            rippleMinRadius + (rippleMaxRadius - rippleMinRadius) * t;
+        float inner = radius > 2.0f ? radius - 2.0f : 1.0f;
+        float outer = radius + 2.0f;
+        unsigned char alpha = (unsigned char)(180 * (1.0f - t));
+        Color rippleColor = (Color){80, 150, 220, alpha};
+        DrawRing(ripples[i].pos, inner, outer, 0.0f, 360.0f, 48, rippleColor);
       }
 
       Color btnBase = (Color){60, 70, 100, 255};
@@ -337,6 +386,7 @@ int main(void) {
     EndDrawing();
   }
 
+  UnloadSound(wallHitSound);
   UnloadSound(clickSound);
   CloseAudioDevice();
   CloseWindow();
