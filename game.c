@@ -1,25 +1,5 @@
 #include "raylib.h"
-#include "cJSON.h"
 #include <math.h>
-
-#define MAX_STAGE_RECTS 32
-#define MAX_STAGE_CIRCLES 32
-
-typedef struct StageData {
-  int rectCount;
-  Rectangle rects[MAX_STAGE_RECTS];
-  int circleCount;
-  Vector2 circlePos[MAX_STAGE_CIRCLES];
-  float circleRadius[MAX_STAGE_CIRCLES];
-  Vector2 goalPos;
-  float goalRadius;
-  bool hasGoal;
-} StageData;
-
-typedef struct Ripple {
-  Vector2 pos;
-  float age;
-} Ripple;
 
 typedef struct Particle {
   Vector2 pos;
@@ -35,12 +15,32 @@ typedef struct Star {
   float maxLife;
 } Star;
 
-static void AddRipple(Ripple *ripples, int maxRipples, int *nextIndex,
-                      Vector2 pos) {
-  ripples[*nextIndex].pos = pos;
-  ripples[*nextIndex].age = 0.0f;
-  *nextIndex = (*nextIndex + 1) % maxRipples;
-}
+typedef struct Obstacle {
+  Rectangle rect;
+  float speed;
+  float vx;
+  bool active;
+} Obstacle;
+
+typedef struct LaserItem {
+  Rectangle rect;
+  float speed;
+  bool active;
+} LaserItem;
+
+typedef struct Bullet {
+  Vector2 pos;
+  Vector2 vel;
+  bool active;
+} Bullet;
+
+typedef struct CircleObstacle {
+  Vector2 pos;
+  float radius;
+  float speed;
+  float shootTimer;
+  bool active;
+} CircleObstacle;
 
 static void AddParticles(Particle *particles, int maxParticles, int count,
                          Vector2 pos) {
@@ -63,218 +63,6 @@ static void AddParticles(Particle *particles, int maxParticles, int count,
   }
 }
 
-static bool RayIntersectCircle(Vector2 pos, Vector2 dir, Vector2 center,
-                               float radius, float *tHit, Vector2 *normal) {
-  Vector2 m = {pos.x - center.x, pos.y - center.y};
-  float b = m.x * dir.x + m.y * dir.y;
-  float c = m.x * m.x + m.y * m.y - radius * radius;
-  if (c > 0.0f && b > 0.0f)
-    return false;
-  float discr = b * b - c;
-  if (discr < 0.0f)
-    return false;
-  float t = -b - sqrtf(discr);
-  if (t < 0.0f)
-    t = 0.0f;
-  if (tHit)
-    *tHit = t;
-  if (normal) {
-    Vector2 hit = {pos.x + dir.x * t, pos.y + dir.y * t};
-    Vector2 n = {hit.x - center.x, hit.y - center.y};
-    float len = sqrtf(n.x * n.x + n.y * n.y);
-    if (len > 0.0001f) {
-      n.x /= len;
-      n.y /= len;
-    }
-    *normal = n;
-  }
-  return true;
-}
-
-static bool RayIntersectRect(Vector2 pos, Vector2 dir, Rectangle rect,
-                             float *tHit, Vector2 *normal) {
-  if (pos.x > rect.x && pos.x < rect.x + rect.width && pos.y > rect.y &&
-      pos.y < rect.y + rect.height)
-    return false;
-
-  float tmin = -INFINITY;
-  float tmax = INFINITY;
-  Vector2 n = {0.0f, 0.0f};
-
-  if (fabsf(dir.x) < 0.0001f) {
-    if (pos.x < rect.x || pos.x > rect.x + rect.width)
-      return false;
-  } else {
-    float tx1 = (rect.x - pos.x) / dir.x;
-    float tx2 = (rect.x + rect.width - pos.x) / dir.x;
-    float tEntry = tx1 < tx2 ? tx1 : tx2;
-    float tExit = tx1 < tx2 ? tx2 : tx1;
-    Vector2 nEntry = tx1 < tx2 ? (Vector2){-1.0f, 0.0f}
-                               : (Vector2){1.0f, 0.0f};
-    if (tEntry > tmin) {
-      tmin = tEntry;
-      n = nEntry;
-    }
-    if (tExit < tmax)
-      tmax = tExit;
-  }
-
-  if (fabsf(dir.y) < 0.0001f) {
-    if (pos.y < rect.y || pos.y > rect.y + rect.height)
-      return false;
-  } else {
-    float ty1 = (rect.y - pos.y) / dir.y;
-    float ty2 = (rect.y + rect.height - pos.y) / dir.y;
-    float tEntry = ty1 < ty2 ? ty1 : ty2;
-    float tExit = ty1 < ty2 ? ty2 : ty1;
-    Vector2 nEntry = ty1 < ty2 ? (Vector2){0.0f, -1.0f}
-                               : (Vector2){0.0f, 1.0f};
-    if (tEntry > tmin) {
-      tmin = tEntry;
-      n = nEntry;
-    }
-    if (tExit < tmax)
-      tmax = tExit;
-  }
-
-  if (tmax < tmin || tmax < 0.0f)
-    return false;
-  if (tmin < 0.0001f)
-    return false;
-
-  if (tHit)
-    *tHit = tmin;
-  if (normal)
-    *normal = n;
-  return true;
-}
-
-static bool RayIntersectWalls(Vector2 pos, Vector2 dir, float xMin, float xMax,
-                              float yMin, float yMax, float *tHit,
-                              Vector2 *normal) {
-  float bestT = INFINITY;
-  Vector2 bestN = {0.0f, 0.0f};
-  bool hit = false;
-
-  if (dir.x > 0.0001f) {
-    float t = (xMax - pos.x) / dir.x;
-    float y = pos.y + dir.y * t;
-    if (t > 0.0001f && y >= yMin && y <= yMax && t < bestT) {
-      bestT = t;
-      bestN = (Vector2){-1.0f, 0.0f};
-      hit = true;
-    }
-  } else if (dir.x < -0.0001f) {
-    float t = (xMin - pos.x) / dir.x;
-    float y = pos.y + dir.y * t;
-    if (t > 0.0001f && y >= yMin && y <= yMax && t < bestT) {
-      bestT = t;
-      bestN = (Vector2){1.0f, 0.0f};
-      hit = true;
-    }
-  }
-
-  if (dir.y > 0.0001f) {
-    float t = (yMax - pos.y) / dir.y;
-    float x = pos.x + dir.x * t;
-    if (t > 0.0001f && x >= xMin && x <= xMax && t < bestT) {
-      bestT = t;
-      bestN = (Vector2){0.0f, -1.0f};
-      hit = true;
-    }
-  } else if (dir.y < -0.0001f) {
-    float t = (yMin - pos.y) / dir.y;
-    float x = pos.x + dir.x * t;
-    if (t > 0.0001f && x >= xMin && x <= xMax && t < bestT) {
-      bestT = t;
-      bestN = (Vector2){0.0f, 1.0f};
-      hit = true;
-    }
-  }
-
-  if (!hit)
-    return false;
-  if (tHit)
-    *tHit = bestT;
-  if (normal)
-    *normal = bestN;
-  return true;
-}
-
-static bool ReadFloat(cJSON *obj, const char *key, float *outValue) {
-  cJSON *item = cJSON_GetObjectItemCaseSensitive(obj, key);
-  if (!cJSON_IsNumber(item))
-    return false;
-  *outValue = (float)item->valuedouble;
-  return true;
-}
-
-static void ResetStage(StageData *stage) {
-  stage->rectCount = 0;
-  stage->circleCount = 0;
-  stage->goalPos = (Vector2){0.0f, 0.0f};
-  stage->goalRadius = 0.0f;
-  stage->hasGoal = false;
-}
-
-static bool LoadStage(const char *path, StageData *stage) {
-  ResetStage(stage);
-  char *text = LoadFileText(path);
-  if (!text)
-    return false;
-
-  cJSON *root = cJSON_Parse(text);
-  if (!root) {
-    UnloadFileText(text);
-    return false;
-  }
-
-  cJSON *rects = cJSON_GetObjectItemCaseSensitive(root, "rects");
-  if (cJSON_IsArray(rects)) {
-    cJSON *item = NULL;
-    cJSON_ArrayForEach(item, rects) {
-      if (stage->rectCount >= MAX_STAGE_RECTS)
-        break;
-      float x, y, w, h;
-      if (!ReadFloat(item, "x", &x) || !ReadFloat(item, "y", &y) ||
-          !ReadFloat(item, "w", &w) || !ReadFloat(item, "h", &h))
-        continue;
-      stage->rects[stage->rectCount++] = (Rectangle){x, y, w, h};
-    }
-  }
-
-  cJSON *circles = cJSON_GetObjectItemCaseSensitive(root, "circles");
-  if (cJSON_IsArray(circles)) {
-    cJSON *item = NULL;
-    cJSON_ArrayForEach(item, circles) {
-      if (stage->circleCount >= MAX_STAGE_CIRCLES)
-        break;
-      float x, y, r;
-      if (!ReadFloat(item, "x", &x) || !ReadFloat(item, "y", &y) ||
-          !ReadFloat(item, "r", &r))
-        continue;
-      stage->circlePos[stage->circleCount] = (Vector2){x, y};
-      stage->circleRadius[stage->circleCount] = r;
-      stage->circleCount++;
-    }
-  }
-
-  cJSON *goal = cJSON_GetObjectItemCaseSensitive(root, "goal");
-  if (cJSON_IsObject(goal)) {
-    float x, y, r;
-    if (ReadFloat(goal, "x", &x) && ReadFloat(goal, "y", &y) &&
-        ReadFloat(goal, "r", &r)) {
-      stage->goalPos = (Vector2){x, y};
-      stage->goalRadius = r;
-      stage->hasGoal = true;
-    }
-  }
-
-  cJSON_Delete(root);
-  UnloadFileText(text);
-  return true;
-}
-
 int main(void) {
   const int screenWidth = 1200;
   const int screenHeight = 900;
@@ -291,50 +79,40 @@ int main(void) {
   Rectangle startButton = {(float)(screenWidth - buttonWidth) / 2,
                            (float)screenHeight - buttonHeight - 60,
                            (float)buttonWidth, (float)buttonHeight};
-  const int wallThickness = 40;
-  const float playerRadius = 35.0f;
-  const Vector2 playerPos = {(float)screenWidth / 2.0f,
-                             (float)screenHeight / 2.0f};
-  float facingAngle = -PI / 2.0f; // up
-  const float arrowLength = 55.0f;
-  const float arrowWidth = 14.0f;
-  const float rotationStep = PI / 24.0f; // 7.5 degrees per click
-  const float rotationSpeed = PI / 2.0f; // 90 degrees per second while held
-  StageData stage = {0};
-  bool stageLoaded = false;
-  Vector2 defaultGoalPos = {(float)screenWidth * 0.75f,
-                            (float)screenHeight * 0.35f};
-  const float defaultGoalRadius = 30.0f;
+  const int playerSize = 18;
+  float playerX = screenWidth * 0.5f;
+  float playerY = screenHeight - 80.0f;
 
-  const int rotateBtnW = 90;
-  const int rotateBtnH = 60;
+  const int maxObstacles = 40;
+  Obstacle obstacles[40];
+  float obstacleSpawnTimer = 0.0f;
+
+  const int maxItems = 8;
+  LaserItem items[8];
+  float itemSpawnTimer = 0.0f;
+  int laserAmmo = 0;
+  const int maxLaserAmmo = 3;
+
+  const int maxCircleObstacles = 10;
+  CircleObstacle circleObstacles[10];
+  float circleSpawnTimer = 0.0f;
+  const int maxBullets = 200;
+  Bullet bullets[200];
+
+  bool laserActive = false;
+  float laserTimer = 0.0f;
+  float laserProgress = 0.0f;
+  const float laserDuration = 0.35f;
+  const float laserSpeed = 1400.0f;
+  const float laserWidth = 6.0f;
+
   const int rotateBtnPad = 20;
   const int fireBtnW = 110;
   const int fireBtnH = 60;
-  Rectangle leftRotateBtn = {
-      (float)(screenWidth - rotateBtnPad * 2 - rotateBtnW * 2),
-      (float)(screenHeight - rotateBtnH - rotateBtnPad), (float)rotateBtnW,
-      (float)rotateBtnH};
-  Rectangle rightRotateBtn = {(float)(screenWidth - rotateBtnPad - rotateBtnW),
-                              (float)(screenHeight - rotateBtnH - rotateBtnPad),
-                              (float)rotateBtnW, (float)rotateBtnH};
   Rectangle fireBtn = {
-      (float)(screenWidth - rotateBtnPad * 3 - rotateBtnW * 2 - fireBtnW),
+      (float)(screenWidth - rotateBtnPad - fireBtnW),
       (float)(screenHeight - fireBtnH - rotateBtnPad), (float)fireBtnW,
       (float)fireBtnH};
-  float beamTimer = 0.0f;
-  const float beamDuration = 0.4f;
-  const float beamLength = 10000.0f;
-  float beamProgress = 0.0f;
-  const float beamSpeed = 1200.0f;
-  Vector2 beamDir = {1.0f, 0.0f};
-  bool goalCleared = false;
-  const float rippleDuration = 0.5f;
-  const float rippleMinRadius = 6.0f;
-  const float rippleMaxRadius = 28.0f;
-  const int maxRipples = 16;
-  Ripple ripples[16];
-  int rippleNext = 0;
   const int maxParticles = 64;
   Particle particles[64];
   const int maxStars = 24;
@@ -349,16 +127,29 @@ int main(void) {
   bool transitioning = false;
   bool fadeOut = true;
   float transitionAlpha = 0.0f;
+  bool dead = false;
+  float runTime = 0.0f;
+  int dodgedCount = 0;
 
-  for (int i = 0; i < maxRipples; i++) {
-    ripples[i].age = -1.0f;
-  }
   for (int i = 0; i < maxParticles; i++) {
     particles[i].age = -1.0f;
   }
   for (int i = 0; i < maxStars; i++) {
     stars[i].life = -1.0f;
   }
+  for (int i = 0; i < maxObstacles; i++) {
+    obstacles[i].active = false;
+  }
+  for (int i = 0; i < maxItems; i++) {
+    items[i].active = false;
+  }
+  for (int i = 0; i < maxCircleObstacles; i++) {
+    circleObstacles[i].active = false;
+  }
+  for (int i = 0; i < maxBullets; i++) {
+    bullets[i].active = false;
+  }
+
 
   while (!WindowShouldClose()) {
     Vector2 mouse = GetMousePosition();
@@ -371,8 +162,30 @@ int main(void) {
       transitioning = true;
       fadeOut = true;
       transitionAlpha = 0.0f;
-      goalCleared = false;
-      stageLoaded = false;
+      dead = false;
+      runTime = 0.0f;
+      dodgedCount = 0;
+      laserAmmo = 0;
+      laserActive = false;
+      laserTimer = 0.0f;
+      laserProgress = 0.0f;
+      obstacleSpawnTimer = 0.0f;
+      itemSpawnTimer = 0.0f;
+      circleSpawnTimer = 0.0f;
+      playerX = screenWidth * 0.5f;
+      playerY = screenHeight - 80.0f;
+      for (int i = 0; i < maxObstacles; i++) {
+        obstacles[i].active = false;
+      }
+      for (int i = 0; i < maxItems; i++) {
+        items[i].active = false;
+      }
+      for (int i = 0; i < maxCircleObstacles; i++) {
+        circleObstacles[i].active = false;
+      }
+      for (int i = 0; i < maxBullets; i++) {
+        bullets[i].active = false;
+      }
     }
 
     float dt = GetFrameTime();
@@ -392,19 +205,6 @@ int main(void) {
           transitioning = false;
         }
       }
-    }
-
-    if (inGame && !stageLoaded) {
-      bool loaded = LoadStage("stages/stage1.json", &stage);
-      if (!loaded)
-        ResetStage(&stage);
-      if (!stage.hasGoal) {
-        stage.goalPos = defaultGoalPos;
-        stage.goalRadius = defaultGoalRadius;
-        stage.hasGoal = true;
-      }
-      goalCleared = false;
-      stageLoaded = true;
     }
 
     float t = (float)GetTime();
@@ -478,199 +278,271 @@ int main(void) {
                startTextSize, WHITE);
     } else {
       ClearBackground(WHITE);
-      Color wallColor = (Color){90, 110, 140, 255};
-      DrawRectangle(0, 0, screenWidth, wallThickness, wallColor); // top
-      DrawRectangle(0, screenHeight - wallThickness, screenWidth, wallThickness,
-                    wallColor);                                    // bottom
-      DrawRectangle(0, 0, wallThickness, screenHeight, wallColor); // left
-      DrawRectangle(screenWidth - wallThickness, 0, wallThickness, screenHeight,
-                    wallColor); // right
 
-      Color rectColor = (Color){130, 130, 150, 255};
-      for (int i = 0; i < stage.rectCount; i++) {
-        DrawRectangleRec(stage.rects[i], rectColor);
+      if (!dead) {
+        runTime += dt;
+        playerX = mouse.x;
+        playerY = mouse.y;
+        if (playerX < playerSize / 2.0f)
+          playerX = playerSize / 2.0f;
+        if (playerX > screenWidth - playerSize / 2.0f)
+          playerX = screenWidth - playerSize / 2.0f;
+        if (playerY < playerSize / 2.0f)
+          playerY = playerSize / 2.0f;
+        if (playerY > screenHeight - playerSize / 2.0f)
+          playerY = screenHeight - playerSize / 2.0f;
       }
-      Color circleColor = (Color){120, 160, 190, 255};
-      for (int i = 0; i < stage.circleCount; i++) {
-        DrawCircleV(stage.circlePos[i], stage.circleRadius[i], circleColor);
-      }
+      Vector2 playerPos = {playerX, playerY};
+      Rectangle playerRect = {playerPos.x - playerSize / 2.0f,
+                              playerPos.y - playerSize / 2.0f,
+                              (float)playerSize, (float)playerSize};
 
-      bool leftHovered = CheckCollisionPointRec(mouse, leftRotateBtn);
-      bool rightHovered = CheckCollisionPointRec(mouse, rightRotateBtn);
-      bool leftHeld = leftHovered && IsMouseButtonDown(MOUSE_LEFT_BUTTON);
-      bool rightHeld = rightHovered && IsMouseButtonDown(MOUSE_LEFT_BUTTON);
       bool fireHovered = CheckCollisionPointRec(mouse, fireBtn);
-      bool fireHeld = fireHovered && IsMouseButtonDown(MOUSE_LEFT_BUTTON);
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        if (leftHovered)
-          facingAngle -= rotationStep;
-        if (rightHovered)
-          facingAngle += rotationStep;
-        if (fireHovered) {
-          beamTimer = beamDuration;
-          beamProgress = 0.0f;
-          Vector2 dir = {cosf(facingAngle), sinf(facingAngle)};
-          beamDir = dir;
-          goalCleared = false;
+      bool firePressed =
+          fireHovered && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
+      if (!dead && !laserActive && laserAmmo > 0 &&
+          (firePressed || IsKeyPressed(KEY_SPACE))) {
+        laserActive = true;
+        laserTimer = laserDuration;
+        laserProgress = 0.0f;
+        laserAmmo--;
+      }
+
+      if (!dead) {
+        obstacleSpawnTimer -= dt;
+        if (obstacleSpawnTimer <= 0.0f) {
+          float speedScale = 1.0f + runTime * 0.015f;
+          for (int i = 0; i < maxObstacles; i++) {
+            if (!obstacles[i].active) {
+              float w = (float)GetRandomValue(30, 80);
+              float h = (float)GetRandomValue(20, 60);
+              float speed = (float)GetRandomValue(160, 360) * speedScale;
+              int mode = GetRandomValue(0, 2);
+              float x = 0.0f;
+              float vx = 0.0f;
+              if (mode == 0) {
+                x = (float)GetRandomValue(0, screenWidth - (int)w);
+                vx = 0.0f;
+              } else if (mode == 1) {
+                x = -w - (float)GetRandomValue(0, 80);
+                vx = (float)GetRandomValue(80, 200) * speedScale;
+              } else {
+                x = screenWidth + (float)GetRandomValue(0, 80);
+                vx = -(float)GetRandomValue(80, 200) * speedScale;
+              }
+              obstacles[i].rect = (Rectangle){x, -h, w, h};
+              obstacles[i].speed = speed;
+              obstacles[i].vx = vx;
+              obstacles[i].active = true;
+              break;
+            }
+          }
+          obstacleSpawnTimer = 0.16f + (float)GetRandomValue(0, 25) / 100.0f;
+        }
+
+        itemSpawnTimer -= dt;
+        if (itemSpawnTimer <= 0.0f) {
+          for (int i = 0; i < maxItems; i++) {
+            if (!items[i].active) {
+              float size = 18.0f;
+              float x = (float)GetRandomValue(0, screenWidth - (int)size);
+              items[i].rect = (Rectangle){x, -size, size, size};
+              items[i].speed = (float)GetRandomValue(140, 240);
+              items[i].active = true;
+              break;
+            }
+          }
+          itemSpawnTimer = 3.0f + (float)GetRandomValue(0, 200) / 100.0f;
+        }
+
+        circleSpawnTimer -= dt;
+        if (circleSpawnTimer <= 0.0f) {
+          for (int i = 0; i < maxCircleObstacles; i++) {
+            if (!circleObstacles[i].active) {
+              float radius = (float)GetRandomValue(20, 35);
+              float x = (float)GetRandomValue((int)radius, screenWidth - (int)radius);
+              circleObstacles[i].pos = (Vector2){x, -radius};
+              circleObstacles[i].radius = radius;
+              circleObstacles[i].speed = (float)GetRandomValue(80, 150);
+              circleObstacles[i].shootTimer = 1.0f + (float)GetRandomValue(0, 100) / 100.0f;
+              circleObstacles[i].active = true;
+              break;
+            }
+          }
+          circleSpawnTimer = 5.0f + (float)GetRandomValue(0, 150) / 100.0f;
         }
       }
-      if (leftHeld)
-        facingAngle -= rotationSpeed * dt;
-      if (rightHeld)
-        facingAngle += rotationSpeed * dt;
-      if (fireHeld) {
-        if (beamTimer <= 0.0f)
-          beamProgress = 0.0f;
-        beamTimer = beamDuration;
-        beamDir = (Vector2){cosf(facingAngle), sinf(facingAngle)};
-        goalCleared = false;
-      }
-      if (facingAngle > PI)
-        facingAngle -= 2.0f * PI;
-      if (facingAngle < -PI)
-        facingAngle += 2.0f * PI;
 
-      Vector2 facingDir = {cosf(facingAngle), sinf(facingAngle)};
-      Vector2 tip = {playerPos.x + facingDir.x * arrowLength,
-                     playerPos.y + facingDir.y * arrowLength};
-      Vector2 perp = {-facingDir.y, facingDir.x};
-      Vector2 left = {tip.x + perp.x * (arrowWidth / 2.0f),
-                      tip.y + perp.y * (arrowWidth / 2.0f)};
-      Vector2 right = {tip.x - perp.x * (arrowWidth / 2.0f),
-                       tip.y - perp.y * (arrowWidth / 2.0f)};
-
-      DrawCircleV(playerPos, playerRadius, (Color){220, 220, 255, 255});
-      DrawLineEx(playerPos, tip, 4.0f, (Color){40, 60, 120, 255});
-      DrawTriangle(tip, left, right, (Color){240, 140, 80, 255});
-      if (stage.hasGoal) {
-        Color goalColor =
-            goalCleared ? (Color){60, 180, 90, 255} : (Color){40, 140, 80, 255};
-        DrawCircleV(stage.goalPos, stage.goalRadius, goalColor);
-        if (goalCleared) {
-          DrawText("CLEAR!", (int)(stage.goalPos.x - 50),
-                   (int)(stage.goalPos.y - 10), 28, BLACK);
+      for (int i = 0; i < maxObstacles; i++) {
+        if (!obstacles[i].active)
+          continue;
+        if (!dead) {
+          obstacles[i].rect.y += obstacles[i].speed * dt;
+          obstacles[i].rect.x += obstacles[i].vx * dt;
+        }
+        if (obstacles[i].rect.y > screenHeight + obstacles[i].rect.height ||
+            obstacles[i].rect.x < -obstacles[i].rect.width * 2 ||
+            obstacles[i].rect.x > screenWidth + obstacles[i].rect.width * 2) {
+          obstacles[i].active = false;
+          if (!dead)
+            dodgedCount++;
+          continue;
+        }
+        if (!dead && CheckCollisionRecs(playerRect, obstacles[i].rect)) {
+          dead = true;
+          laserActive = false;
+          PlaySound(wallHitSound);
         }
       }
 
-      if (beamTimer > 0.0f) {
-        beamTimer -= dt;
-        float prevProgress = beamProgress;
-        beamProgress += beamSpeed * dt;
-        if (beamProgress > beamLength)
-          beamProgress = beamLength;
+      for (int i = 0; i < maxItems; i++) {
+        if (!items[i].active)
+          continue;
+        if (!dead)
+          items[i].rect.y += items[i].speed * dt;
+        if (items[i].rect.y > screenHeight + items[i].rect.height) {
+          items[i].active = false;
+          continue;
+        }
+        if (!dead && CheckCollisionRecs(playerRect, items[i].rect)) {
+          items[i].active = false;
+          if (laserAmmo < maxLaserAmmo)
+            laserAmmo++;
+          PlaySound(clickSound);
+        }
+      }
+
+      for (int i = 0; i < maxCircleObstacles; i++) {
+        if (!circleObstacles[i].active)
+          continue;
+        if (!dead) {
+          circleObstacles[i].pos.y += circleObstacles[i].speed * dt;
+          circleObstacles[i].shootTimer -= dt;
+          if (circleObstacles[i].shootTimer <= 0.0f) {
+            // Shoot bullets in 360 degrees at 20 degree intervals
+            for (int angle = 0; angle < 360; angle += 20) {
+              for (int j = 0; j < maxBullets; j++) {
+                if (!bullets[j].active) {
+                  float rad = angle * DEG2RAD;
+                  float bulletSpeed = 200.0f;
+                  bullets[j].pos = circleObstacles[i].pos;
+                  bullets[j].vel = (Vector2){cosf(rad) * bulletSpeed, sinf(rad) * bulletSpeed};
+                  bullets[j].active = true;
+                  break;
+                }
+              }
+            }
+            circleObstacles[i].shootTimer = 1.5f + (float)GetRandomValue(0, 100) / 100.0f;
+          }
+        }
+        if (circleObstacles[i].pos.y > screenHeight + circleObstacles[i].radius * 2) {
+          circleObstacles[i].active = false;
+          continue;
+        }
+        if (!dead && CheckCollisionCircleRec(circleObstacles[i].pos, circleObstacles[i].radius, playerRect)) {
+          dead = true;
+          laserActive = false;
+          PlaySound(wallHitSound);
+        }
+      }
+
+      for (int i = 0; i < maxBullets; i++) {
+        if (!bullets[i].active)
+          continue;
+        if (!dead) {
+          bullets[i].pos.x += bullets[i].vel.x * dt;
+          bullets[i].pos.y += bullets[i].vel.y * dt;
+        }
+        if (bullets[i].pos.x < -10 || bullets[i].pos.x > screenWidth + 10 ||
+            bullets[i].pos.y < -10 || bullets[i].pos.y > screenHeight + 10) {
+          bullets[i].active = false;
+          continue;
+        }
+        if (!dead && CheckCollisionCircleRec(bullets[i].pos, 4.0f, playerRect)) {
+          dead = true;
+          laserActive = false;
+          PlaySound(wallHitSound);
+        }
+      }
+
+      if (laserActive) {
+        laserTimer -= dt;
+        laserProgress += laserSpeed * dt;
+        if (laserProgress > playerPos.y)
+          laserProgress = playerPos.y;
+        if (laserTimer <= 0.0f)
+          laserActive = false;
+
         float beamHue =
-            fmodf((float)GetTime() * 180.0f + beamProgress * 0.05f, 360.0f);
+            fmodf((float)GetTime() * 180.0f + laserProgress * 0.2f, 360.0f);
         Color beamColor = ColorFromHSV(beamHue, 0.75f, 1.0f);
         beamColor.a = 200;
-        Vector2 dir = beamDir;
-        float dirLen = sqrtf(dir.x * dir.x + dir.y * dir.y);
-        if (dirLen > 0.0001f) {
-          dir.x /= dirLen;
-          dir.y /= dirLen;
-          Vector2 pos = playerPos;
-          float remaining = beamProgress;
-          float traveled = 0.0f;
-          const float xMin = (float)wallThickness;
-          const float xMax = (float)(screenWidth - wallThickness);
-          const float yMin = (float)wallThickness;
-          const float yMax = (float)(screenHeight - wallThickness);
-          int bounces = 0;
-          const int maxBounces = 6;
-          while (remaining > 0.0f && bounces <= maxBounces) {
-            float bestT = remaining;
-            Vector2 bestNormal = {0.0f, 0.0f};
-            bool hitReflect = false;
+        Vector2 beamEnd = {playerPos.x, playerPos.y - laserProgress};
+        DrawLineEx(playerPos, beamEnd, laserWidth, beamColor);
 
-            float tWall = 0.0f;
-            Vector2 nWall = {0.0f, 0.0f};
-            if (RayIntersectWalls(pos, dir, xMin, xMax, yMin, yMax, &tWall,
-                                  &nWall) &&
-                tWall < bestT) {
-              bestT = tWall;
-              bestNormal = nWall;
-              hitReflect = true;
-            }
-
-            for (int i = 0; i < stage.rectCount; i++) {
-              float tRect = 0.0f;
-              Vector2 nRect = {0.0f, 0.0f};
-              if (RayIntersectRect(pos, dir, stage.rects[i], &tRect, &nRect) &&
-                  tRect < bestT) {
-                bestT = tRect;
-                bestNormal = nRect;
-                hitReflect = true;
-              }
-            }
-
-            for (int i = 0; i < stage.circleCount; i++) {
-              float tCircle = 0.0f;
-              Vector2 nCircle = {0.0f, 0.0f};
-              if (RayIntersectCircle(pos, dir, stage.circlePos[i],
-                                     stage.circleRadius[i], &tCircle,
-                                     &nCircle) &&
-                  tCircle < bestT) {
-                bestT = tCircle;
-                bestNormal = nCircle;
-                hitReflect = true;
-              }
-            }
-
-            if (!goalCleared && stage.hasGoal) {
-              float tGoal = 0.0f;
-              if (RayIntersectCircle(pos, dir, stage.goalPos, stage.goalRadius,
-                                     &tGoal, NULL) &&
-                  tGoal <= bestT && tGoal <= remaining) {
-                Vector2 goalHit = {pos.x + dir.x * tGoal,
-                                   pos.y + dir.y * tGoal};
-                DrawLineEx(pos, goalHit, 6.0f, beamColor);
-                goalCleared = true;
-                remaining = 0.0f;
-                break;
-              }
-            }
-
-            Vector2 hitPos = {pos.x + dir.x * bestT, pos.y + dir.y * bestT};
-            DrawLineEx(pos, hitPos, 6.0f, beamColor);
-
-            remaining -= bestT;
-            traveled += bestT;
-
-            if (!hitReflect || bestT <= 0.0001f)
-              break;
-
-            float hitDist = traveled;
-            if (hitDist > prevProgress && hitDist <= beamProgress) {
-              AddRipple(ripples, maxRipples, &rippleNext, hitPos);
-              AddParticles(particles, maxParticles, 8, hitPos);
-              PlaySound(wallHitSound);
-            }
-
-            float dot = dir.x * bestNormal.x + dir.y * bestNormal.y;
-            dir.x = dir.x - 2.0f * dot * bestNormal.x;
-            dir.y = dir.y - 2.0f * dot * bestNormal.y;
-            pos = hitPos;
-            bounces++;
+        Rectangle beamRect = {playerPos.x - laserWidth / 2.0f,
+                              playerPos.y - laserProgress, laserWidth,
+                              laserProgress};
+        for (int i = 0; i < maxObstacles; i++) {
+          if (!obstacles[i].active)
+            continue;
+          if (CheckCollisionRecs(beamRect, obstacles[i].rect)) {
+            Vector2 hitPos = {obstacles[i].rect.x + obstacles[i].rect.width / 2,
+                              obstacles[i].rect.y +
+                                  obstacles[i].rect.height / 2};
+            obstacles[i].active = false;
+            AddParticles(particles, maxParticles, 10, hitPos);
+            PlaySound(wallHitSound);
+          }
+        }
+        for (int i = 0; i < maxCircleObstacles; i++) {
+          if (!circleObstacles[i].active)
+            continue;
+          Rectangle circleRect = {circleObstacles[i].pos.x - circleObstacles[i].radius,
+                                  circleObstacles[i].pos.y - circleObstacles[i].radius,
+                                  circleObstacles[i].radius * 2,
+                                  circleObstacles[i].radius * 2};
+          if (CheckCollisionRecs(beamRect, circleRect)) {
+            circleObstacles[i].active = false;
+            AddParticles(particles, maxParticles, 15, circleObstacles[i].pos);
+            PlaySound(wallHitSound);
+          }
+        }
+        for (int i = 0; i < maxBullets; i++) {
+          if (!bullets[i].active)
+            continue;
+          if (bullets[i].pos.x >= beamRect.x && bullets[i].pos.x <= beamRect.x + beamRect.width &&
+              bullets[i].pos.y >= beamRect.y && bullets[i].pos.y <= beamRect.y + beamRect.height) {
+            bullets[i].active = false;
           }
         }
       }
 
-      for (int i = 0; i < maxRipples; i++) {
-        if (ripples[i].age < 0.0f)
-          continue;
-        ripples[i].age += dt;
-        float t = ripples[i].age / rippleDuration;
-        if (t >= 1.0f) {
-          ripples[i].age = -1.0f;
-          continue;
-        }
-        float radius =
-            rippleMinRadius + (rippleMaxRadius - rippleMinRadius) * t;
-        float inner = radius > 2.0f ? radius - 2.0f : 1.0f;
-        float outer = radius + 2.0f;
-        unsigned char alpha = (unsigned char)(180 * (1.0f - t));
-        Color rippleColor = (Color){80, 150, 220, alpha};
-        DrawRing(ripples[i].pos, inner, outer, 0.0f, 360.0f, 48, rippleColor);
+      Color obstacleColor = (Color){50, 60, 80, 255};
+      for (int i = 0; i < maxObstacles; i++) {
+        if (obstacles[i].active)
+          DrawRectangleRec(obstacles[i].rect, obstacleColor);
       }
+
+      Color itemColor = (Color){80, 200, 120, 255};
+      for (int i = 0; i < maxItems; i++) {
+        if (items[i].active)
+          DrawRectangleRec(items[i].rect, itemColor);
+      }
+
+      Color circleColor = (Color){180, 60, 100, 255};
+      for (int i = 0; i < maxCircleObstacles; i++) {
+        if (circleObstacles[i].active)
+          DrawCircleV(circleObstacles[i].pos, circleObstacles[i].radius, circleColor);
+      }
+
+      Color bulletColor = (Color){220, 80, 80, 255};
+      for (int i = 0; i < maxBullets; i++) {
+        if (bullets[i].active)
+          DrawCircleV(bullets[i].pos, 4.0f, bulletColor);
+      }
+
+      DrawRectangleRec(playerRect, (Color){40, 50, 80, 255});
 
       for (int i = 0; i < maxParticles; i++) {
         if (particles[i].age < 0.0f)
@@ -689,10 +561,9 @@ int main(void) {
         DrawCircleV(particles[i].pos, 2.5f, (Color){255, 170, 90, alpha});
       }
 
-      Color btnBase = (Color){60, 70, 100, 255};
-      Color btnHover = (Color){80, 100, 140, 255};
-      Color fireColor =
-          fireHovered ? (Color){200, 80, 80, 255} : (Color){160, 60, 60, 255};
+      Color fireColor = fireHovered && laserAmmo > 0
+                            ? (Color){200, 80, 80, 255}
+                            : (Color){150, 150, 150, 255};
       DrawRectangleRounded(fireBtn, 0.2f, 6, fireColor);
       DrawRectangleRoundedLines(fireBtn, 0.2f, 6, 2, (Color){30, 20, 20, 255});
       const char *fireTxt = "FIRE";
@@ -701,28 +572,46 @@ int main(void) {
           fireTxt,
           (int)(fireBtn.x + (fireBtnW - MeasureText(fireTxt, fireFont)) / 2),
           (int)(fireBtn.y + (fireBtnH - fireFont) / 2), fireFont, WHITE);
+      DrawText(TextFormat("LASER: %d", laserAmmo),
+               (int)(fireBtn.x - 140), (int)(fireBtn.y + 18), 20, BLACK);
+      DrawText("MOUSE: MOVE", 20, 20, 20, BLACK);
+      DrawText("SPACE or FIRE: LASER", 20, 48, 20, BLACK);
+      const char *dodgedLabel = TextFormat("DODGED: %d", dodgedCount);
+      int dodgedWidth = MeasureText(dodgedLabel, 22);
+      DrawText(dodgedLabel, screenWidth - dodgedWidth - 20, 20, 22, BLACK);
 
-      DrawRectangleRounded(leftRotateBtn, 0.2f, 6,
-                           leftHovered ? btnHover : btnBase);
-      DrawRectangleRoundedLines(leftRotateBtn, 0.2f, 6, 2,
-                                (Color){20, 20, 30, 255});
-      DrawRectangleRounded(rightRotateBtn, 0.2f, 6,
-                           rightHovered ? btnHover : btnBase);
-      DrawRectangleRoundedLines(rightRotateBtn, 0.2f, 6, 2,
-                                (Color){20, 20, 30, 255});
-      const char *leftTxt = "<";
-      const char *rightTxt = ">";
-      int rotFont = 28;
-      DrawText(leftTxt,
-               (int)(leftRotateBtn.x +
-                     (rotateBtnW - MeasureText(leftTxt, rotFont)) / 2),
-               (int)(leftRotateBtn.y + (rotateBtnH - rotFont) / 2), rotFont,
-               WHITE);
-      DrawText(rightTxt,
-               (int)(rightRotateBtn.x +
-                     (rotateBtnW - MeasureText(rightTxt, rotFont)) / 2),
-               (int)(rightRotateBtn.y + (rotateBtnH - rotFont) / 2), rotFont,
-               WHITE);
+      if (dead) {
+        DrawText("GAME OVER", screenWidth / 2 - 140, screenHeight / 2 - 40,
+                 40, BLACK);
+        DrawText("Press R to Restart", screenWidth / 2 - 150,
+                 screenHeight / 2 + 10, 22, BLACK);
+        if (IsKeyPressed(KEY_R)) {
+          dead = false;
+          runTime = 0.0f;
+          dodgedCount = 0;
+          laserAmmo = 0;
+          laserActive = false;
+          laserTimer = 0.0f;
+          laserProgress = 0.0f;
+          obstacleSpawnTimer = 0.0f;
+          itemSpawnTimer = 0.0f;
+          circleSpawnTimer = 0.0f;
+          playerX = screenWidth * 0.5f;
+          playerY = screenHeight - 80.0f;
+          for (int i = 0; i < maxObstacles; i++) {
+            obstacles[i].active = false;
+          }
+          for (int i = 0; i < maxItems; i++) {
+            items[i].active = false;
+          }
+          for (int i = 0; i < maxCircleObstacles; i++) {
+            circleObstacles[i].active = false;
+          }
+          for (int i = 0; i < maxBullets; i++) {
+            bullets[i].active = false;
+          }
+        }
+      }
     }
 
     if (transitioning || fadeOut) {
