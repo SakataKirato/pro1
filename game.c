@@ -42,6 +42,22 @@ typedef struct CircleObstacle {
   bool active;
 } CircleObstacle;
 
+typedef struct Turret {
+  float x;
+  float vx;
+  float shootTimer;
+  bool active;
+} Turret;
+
+typedef struct TurretLaser {
+  float x;
+  float width;
+  float progress;
+  float warningTimer;
+  bool active;
+  bool firing;
+} TurretLaser;
+
 static void AddParticles(Particle *particles, int maxParticles, int count,
                          Vector2 pos) {
   for (int i = 0; i < count; i++) {
@@ -99,20 +115,20 @@ int main(void) {
   const int maxBullets = 200;
   Bullet bullets[200];
 
+  const int maxTurrets = 2;
+  Turret turrets[2];
+  const int maxTurretLasers = 2;
+  TurretLaser turretLasers[2];
+  const float turretLaserWidth = 40.0f;
+  const float turretWarningTime = 1.0f;
+  const float turretFireTime = 0.5f;
+
   bool laserActive = false;
   float laserTimer = 0.0f;
   float laserProgress = 0.0f;
   const float laserDuration = 0.35f;
   const float laserSpeed = 1400.0f;
   const float laserWidth = 6.0f;
-
-  const int rotateBtnPad = 20;
-  const int fireBtnW = 110;
-  const int fireBtnH = 60;
-  Rectangle fireBtn = {
-      (float)(screenWidth - rotateBtnPad - fireBtnW),
-      (float)(screenHeight - fireBtnH - rotateBtnPad), (float)fireBtnW,
-      (float)fireBtnH};
   const int maxParticles = 64;
   Particle particles[64];
   const int maxStars = 24;
@@ -148,6 +164,18 @@ int main(void) {
   }
   for (int i = 0; i < maxBullets; i++) {
     bullets[i].active = false;
+  }
+  for (int i = 0; i < maxTurrets; i++) {
+    // Distribute turrets evenly across the screen
+    turrets[i].x = (float)(i + 1) * screenWidth / (maxTurrets + 1);
+    // Alternate direction for each turret
+    turrets[i].vx = (i % 2 == 0) ? 150.0f : -150.0f;
+    // Stagger shoot timers so they don't all fire at once
+    turrets[i].shootTimer = 5.0f + (float)i * 1.0f;
+    turrets[i].active = true;
+  }
+  for (int i = 0; i < maxTurretLasers; i++) {
+    turretLasers[i].active = false;
   }
 
 
@@ -297,11 +325,8 @@ int main(void) {
                               playerPos.y - playerSize / 2.0f,
                               (float)playerSize, (float)playerSize};
 
-      bool fireHovered = CheckCollisionPointRec(mouse, fireBtn);
-      bool firePressed =
-          fireHovered && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
       if (!dead && !laserActive && laserAmmo > 0 &&
-          (firePressed || IsKeyPressed(KEY_SPACE))) {
+          IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         laserActive = true;
         laserTimer = laserDuration;
         laserProgress = 0.0f;
@@ -370,6 +395,41 @@ int main(void) {
             }
           }
           circleSpawnTimer = 5.0f + (float)GetRandomValue(0, 150) / 100.0f;
+        }
+
+        // Update turrets
+        for (int i = 0; i < maxTurrets; i++) {
+          if (!turrets[i].active)
+            continue;
+          
+          // Move turret horizontally
+          turrets[i].x += turrets[i].vx * dt;
+          
+          // Bounce off screen edges
+          if (turrets[i].x < 30) {
+            turrets[i].x = 30;
+            turrets[i].vx = -turrets[i].vx;
+          } else if (turrets[i].x > screenWidth - 30) {
+            turrets[i].x = screenWidth - 30;
+            turrets[i].vx = -turrets[i].vx;
+          }
+          
+          turrets[i].shootTimer -= dt;
+          if (turrets[i].shootTimer <= 0.0f) {
+            // Find an available laser slot
+            for (int j = 0; j < maxTurretLasers; j++) {
+              if (!turretLasers[j].active) {
+                turretLasers[j].x = turrets[i].x;
+                turretLasers[j].width = turretLaserWidth;
+                turretLasers[j].progress = 0.0f;
+                turretLasers[j].warningTimer = turretWarningTime;
+                turretLasers[j].active = true;
+                turretLasers[j].firing = false;
+                break;
+              }
+            }
+            turrets[i].shootTimer = 5.0f;
+          }
         }
       }
 
@@ -465,6 +525,43 @@ int main(void) {
         }
       }
 
+      // Update turret lasers
+      for (int i = 0; i < maxTurretLasers; i++) {
+        if (!turretLasers[i].active)
+          continue;
+        
+        if (!dead) {
+          if (!turretLasers[i].firing) {
+            // Warning phase
+            turretLasers[i].warningTimer -= dt;
+            if (turretLasers[i].warningTimer <= 0.0f) {
+              turretLasers[i].firing = true;
+              turretLasers[i].progress = 0.0f;
+            }
+          } else {
+            // Firing phase
+            turretLasers[i].progress += dt;
+            if (turretLasers[i].progress >= turretFireTime) {
+              turretLasers[i].active = false;
+              continue;
+            }
+            
+            // Check collision with player during firing
+            Rectangle laserRect = {
+              turretLasers[i].x - turretLasers[i].width / 2.0f,
+              0,
+              turretLasers[i].width,
+              (float)screenHeight
+            };
+            if (CheckCollisionRecs(laserRect, playerRect)) {
+              dead = true;
+              laserActive = false;
+              PlaySound(wallHitSound);
+            }
+          }
+        }
+      }
+
       if (laserActive) {
         laserTimer -= dt;
         laserProgress += laserSpeed * dt;
@@ -542,6 +639,46 @@ int main(void) {
           DrawCircleV(bullets[i].pos, 4.0f, bulletColor);
       }
 
+      // Draw turrets
+      Color turretColor = (Color){60, 60, 70, 255};
+      for (int i = 0; i < maxTurrets; i++) {
+        if (turrets[i].active) {
+          DrawRectangle((int)(turrets[i].x - 15), 0, 30, 20, turretColor);
+          DrawCircle((int)turrets[i].x, 20, 8, (Color){80, 80, 90, 255});
+        }
+      }
+
+      // Draw turret lasers
+      for (int i = 0; i < maxTurretLasers; i++) {
+        if (!turretLasers[i].active)
+          continue;
+        
+        if (!turretLasers[i].firing) {
+          // Warning phase - red translucent indicator
+          float alpha = 100 + 155 * (1.0f - turretLasers[i].warningTimer / turretWarningTime);
+          Color warningColor = (Color){255, 50, 50, (unsigned char)alpha};
+          DrawRectangle(
+            (int)(turretLasers[i].x - turretLasers[i].width / 2.0f),
+            0,
+            (int)turretLasers[i].width,
+            screenHeight,
+            warningColor
+          );
+        } else {
+          // Firing phase - bright laser beam
+          float intensity = 1.0f - (turretLasers[i].progress / turretFireTime);
+          unsigned char alpha = (unsigned char)(255 * intensity);
+          Color laserColor = (Color){255, 255, 100, alpha};
+          DrawRectangle(
+            (int)(turretLasers[i].x - turretLasers[i].width / 2.0f),
+            0,
+            (int)turretLasers[i].width,
+            screenHeight,
+            laserColor
+          );
+        }
+      }
+
       DrawRectangleRec(playerRect, (Color){40, 50, 80, 255});
 
       for (int i = 0; i < maxParticles; i++) {
@@ -561,21 +698,9 @@ int main(void) {
         DrawCircleV(particles[i].pos, 2.5f, (Color){255, 170, 90, alpha});
       }
 
-      Color fireColor = fireHovered && laserAmmo > 0
-                            ? (Color){200, 80, 80, 255}
-                            : (Color){150, 150, 150, 255};
-      DrawRectangleRounded(fireBtn, 0.2f, 6, fireColor);
-      DrawRectangleRoundedLines(fireBtn, 0.2f, 6, 2, (Color){30, 20, 20, 255});
-      const char *fireTxt = "FIRE";
-      int fireFont = 24;
-      DrawText(
-          fireTxt,
-          (int)(fireBtn.x + (fireBtnW - MeasureText(fireTxt, fireFont)) / 2),
-          (int)(fireBtn.y + (fireBtnH - fireFont) / 2), fireFont, WHITE);
-      DrawText(TextFormat("LASER: %d", laserAmmo),
-               (int)(fireBtn.x - 140), (int)(fireBtn.y + 18), 20, BLACK);
-      DrawText("MOUSE: MOVE", 20, 20, 20, BLACK);
-      DrawText("SPACE or FIRE: LASER", 20, 48, 20, BLACK);
+      DrawText(TextFormat("LASER: %d", laserAmmo), 20, 20, 22, BLACK);
+      DrawText("MOUSE: MOVE", 20, 48, 20, BLACK);
+      DrawText("LEFT CLICK: LASER", 20, 76, 20, BLACK);
       const char *dodgedLabel = TextFormat("DODGED: %d", dodgedCount);
       int dodgedWidth = MeasureText(dodgedLabel, 22);
       DrawText(dodgedLabel, screenWidth - dodgedWidth - 20, 20, 22, BLACK);
