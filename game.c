@@ -40,6 +40,9 @@ typedef struct CircleObstacle {
   float speed;
   float shootTimer;
   bool active;
+  bool isFiring;
+  float fireDelay;
+  int currentAngle;
 } CircleObstacle;
 
 typedef struct Turret {
@@ -137,6 +140,12 @@ int main(void) {
 
   Sound clickSound = LoadSound("決定ボタンを押す2.mp3");
   Sound wallHitSound = LoadSound("カーソル移動12.mp3");
+  const int maxLaserSounds = 5;
+  Sound laserSounds[5];
+  for (int i = 0; i < maxLaserSounds; i++) {
+    laserSounds[i] = LoadSound("気弾2.mp3");
+  }
+  Music bgm = LoadMusicStream("maou_bgm_8bit27.mp3");
   const float hueSpeed = 100.0f;         // degrees per second for hue shift
   const float transitionDuration = 0.6f; // seconds
   bool inGame = false;
@@ -202,6 +211,7 @@ int main(void) {
       circleSpawnTimer = 0.0f;
       playerX = screenWidth * 0.5f;
       playerY = screenHeight - 80.0f;
+      PlayMusicStream(bgm);
       for (int i = 0; i < maxObstacles; i++) {
         obstacles[i].active = false;
       }
@@ -245,6 +255,8 @@ int main(void) {
 
     BeginDrawing();
     ClearBackground((Color){18, 18, 28, 255});
+
+    UpdateMusicStream(bgm);
 
     if (!inGame) {
       starSpawnTimer -= dt;
@@ -391,6 +403,9 @@ int main(void) {
               circleObstacles[i].speed = (float)GetRandomValue(80, 150);
               circleObstacles[i].shootTimer = 1.0f + (float)GetRandomValue(0, 100) / 100.0f;
               circleObstacles[i].active = true;
+              circleObstacles[i].isFiring = false;
+              circleObstacles[i].fireDelay = 0.0f;
+              circleObstacles[i].currentAngle = 0;
               break;
             }
           }
@@ -425,6 +440,13 @@ int main(void) {
                 turretLasers[j].warningTimer = turretWarningTime;
                 turretLasers[j].active = true;
                 turretLasers[j].firing = false;
+                // Find an available sound instance to play
+                for (int k = 0; k < maxLaserSounds; k++) {
+                  if (!IsSoundPlaying(laserSounds[k])) {
+                    PlaySound(laserSounds[k]);
+                    break;
+                  }
+                }
                 break;
               }
             }
@@ -477,13 +499,24 @@ int main(void) {
           continue;
         if (!dead) {
           circleObstacles[i].pos.y += circleObstacles[i].speed * dt;
-          circleObstacles[i].shootTimer -= dt;
-          if (circleObstacles[i].shootTimer <= 0.0f) {
-            // Shoot bullets in 360 degrees at 20 degree intervals
-            for (int angle = 0; angle < 360; angle += 20) {
+          
+          if (!circleObstacles[i].isFiring) {
+            // Not currently firing, check if it's time to start
+            circleObstacles[i].shootTimer -= dt;
+            if (circleObstacles[i].shootTimer <= 0.0f) {
+              circleObstacles[i].isFiring = true;
+              circleObstacles[i].currentAngle = 0;
+              circleObstacles[i].fireDelay = 0.0f;
+              circleObstacles[i].shootTimer = 1.5f + (float)GetRandomValue(0, 100) / 100.0f;
+            }
+          } else {
+            // Currently firing bullets sequentially
+            circleObstacles[i].fireDelay -= dt;
+            if (circleObstacles[i].fireDelay <= 0.0f) {
+              // Fire one bullet at current angle
               for (int j = 0; j < maxBullets; j++) {
                 if (!bullets[j].active) {
-                  float rad = angle * DEG2RAD;
+                  float rad = circleObstacles[i].currentAngle * DEG2RAD;
                   float bulletSpeed = 200.0f;
                   bullets[j].pos = circleObstacles[i].pos;
                   bullets[j].vel = (Vector2){cosf(rad) * bulletSpeed, sinf(rad) * bulletSpeed};
@@ -491,8 +524,17 @@ int main(void) {
                   break;
                 }
               }
+              
+              // Move to next angle
+              circleObstacles[i].currentAngle += 20;
+              if (circleObstacles[i].currentAngle >= 360) {
+                // Finished firing all bullets
+                circleObstacles[i].isFiring = false;
+              } else {
+                // Set delay for next bullet
+                circleObstacles[i].fireDelay = 0.1f;
+              }
             }
-            circleObstacles[i].shootTimer = 1.5f + (float)GetRandomValue(0, 100) / 100.0f;
           }
         }
         if (circleObstacles[i].pos.y > screenHeight + circleObstacles[i].radius * 2) {
@@ -748,8 +790,12 @@ int main(void) {
     EndDrawing();
   }
 
+  for (int i = 0; i < maxLaserSounds; i++) {
+    UnloadSound(laserSounds[i]);
+  }
   UnloadSound(wallHitSound);
   UnloadSound(clickSound);
+  UnloadMusicStream(bgm);
   CloseAudioDevice();
   CloseWindow();
   return 0;
