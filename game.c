@@ -28,6 +28,12 @@ typedef struct LaserItem {
   bool active;
 } LaserItem;
 
+typedef struct StarItem {
+  Rectangle rect;
+  float speed;
+  bool active;
+} StarItem;
+
 typedef struct Bullet {
   Vector2 pos;
   Vector2 vel;
@@ -112,6 +118,13 @@ int main(void) {
   int laserAmmo = 0;
   const int maxLaserAmmo = 3;
 
+  const int maxStarItems = 3;
+  StarItem starItems[3];
+  float starSpawnTimer = 0.0f;
+  bool invincible = false;
+  float invincibilityTimer = 0.0f;
+  const float invincibilityDuration = 5.0f;
+
   const int maxCircleObstacles = 10;
   CircleObstacle circleObstacles[10];
   float circleSpawnTimer = 0.0f;
@@ -136,7 +149,6 @@ int main(void) {
   Particle particles[64];
   const int maxStars = 24;
   Star stars[24];
-  float starSpawnTimer = 0.0f;
 
   Sound clickSound = LoadSound("決定ボタンを押す2.mp3");
   Sound wallHitSound = LoadSound("カーソル移動12.mp3");
@@ -147,7 +159,10 @@ int main(void) {
   }
   Sound bulletFireSound = LoadSound("決定ボタンを押す34.mp3");
   Sound deathSound = LoadSound("チーン1.mp3");
+  Sound itemGetSound = LoadSound("se_itemget_004.wav");
   Music bgm = LoadMusicStream("maou_bgm_8bit27.mp3");
+  Texture2D laserItemTexture = LoadTexture("laser.gif");
+  Texture2D starItemTexture = LoadTexture("star.gif");
   const float hueSpeed = 100.0f;         // degrees per second for hue shift
   const float transitionDuration = 0.6f; // seconds
   bool inGame = false;
@@ -169,6 +184,9 @@ int main(void) {
   }
   for (int i = 0; i < maxItems; i++) {
     items[i].active = false;
+  }
+  for (int i = 0; i < maxStarItems; i++) {
+    starItems[i].active = false;
   }
   for (int i = 0; i < maxCircleObstacles; i++) {
     circleObstacles[i].active = false;
@@ -211,6 +229,9 @@ int main(void) {
       obstacleSpawnTimer = 0.0f;
       itemSpawnTimer = 0.0f;
       circleSpawnTimer = 0.0f;
+      starSpawnTimer = 0.0f;
+      invincible = false;
+      invincibilityTimer = 0.0f;
       playerX = screenWidth * 0.5f;
       playerY = screenHeight - 80.0f;
       PlayMusicStream(bgm);
@@ -219,6 +240,9 @@ int main(void) {
       }
       for (int i = 0; i < maxItems; i++) {
         items[i].active = false;
+      }
+      for (int i = 0; i < maxStarItems; i++) {
+        starItems[i].active = false;
       }
       for (int i = 0; i < maxCircleObstacles; i++) {
         circleObstacles[i].active = false;
@@ -383,15 +407,30 @@ int main(void) {
         if (itemSpawnTimer <= 0.0f) {
           for (int i = 0; i < maxItems; i++) {
             if (!items[i].active) {
-              float size = 18.0f;
+              float size = (float)laserItemTexture.width;
               float x = (float)GetRandomValue(0, screenWidth - (int)size);
-              items[i].rect = (Rectangle){x, -size, size, size};
+              items[i].rect = (Rectangle){x, -size, size, (float)laserItemTexture.height};
               items[i].speed = (float)GetRandomValue(140, 240);
               items[i].active = true;
               break;
             }
           }
           itemSpawnTimer = 3.0f + (float)GetRandomValue(0, 200) / 100.0f;
+        }
+
+        starSpawnTimer -= dt;
+        if (starSpawnTimer <= 0.0f) {
+          for (int i = 0; i < maxStarItems; i++) {
+            if (!starItems[i].active) {
+              float size = (float)starItemTexture.width;
+              float x = (float)GetRandomValue(0, screenWidth - (int)size);
+              starItems[i].rect = (Rectangle){x, -size, size, (float)starItemTexture.height};
+              starItems[i].speed = (float)GetRandomValue(100, 180);
+              starItems[i].active = true;
+              break;
+            }
+          }
+          starSpawnTimer = 15.0f + (float)GetRandomValue(0, 1000) / 100.0f;
         }
 
         circleSpawnTimer -= dt;
@@ -473,13 +512,21 @@ int main(void) {
           continue;
         }
         if (!dead && CheckCollisionRecs(playerRect, obstacles[i].rect)) {
-          dead = true;
-          laserActive = false;
-          StopMusicStream(bgm);
-          for (int k = 0; k < maxLaserSounds; k++) {
-            StopSound(laserSounds[k]);
+          if (invincible) {
+            obstacles[i].active = false;
+            Vector2 hitPos = {obstacles[i].rect.x + obstacles[i].rect.width / 2,
+                              obstacles[i].rect.y + obstacles[i].rect.height / 2};
+            AddParticles(particles, maxParticles, 10, hitPos);
+            PlaySound(wallHitSound);
+          } else {
+            dead = true;
+            laserActive = false;
+            StopMusicStream(bgm);
+            for (int k = 0; k < maxLaserSounds; k++) {
+              StopSound(laserSounds[k]);
+            }
+            PlaySound(deathSound);
           }
-          PlaySound(deathSound);
         }
       }
 
@@ -496,7 +543,33 @@ int main(void) {
           items[i].active = false;
           if (laserAmmo < maxLaserAmmo)
             laserAmmo++;
-          PlaySound(clickSound);
+          PlaySound(itemGetSound);
+        }
+      }
+
+      for (int i = 0; i < maxStarItems; i++) {
+        if (!starItems[i].active)
+          continue;
+        if (!dead)
+          starItems[i].rect.y += starItems[i].speed * dt;
+        if (starItems[i].rect.y > screenHeight + starItems[i].rect.height) {
+          starItems[i].active = false;
+          continue;
+        }
+        if (!dead && CheckCollisionRecs(playerRect, starItems[i].rect)) {
+          starItems[i].active = false;
+          invincible = true;
+          invincibilityTimer = invincibilityDuration;
+          PlaySound(itemGetSound);
+        }
+      }
+
+      // Update invincibility timer
+      if (invincible) {
+        invincibilityTimer -= dt;
+        if (invincibilityTimer <= 0.0f) {
+          invincible = false;
+          invincibilityTimer = 0.0f;
         }
       }
 
@@ -549,13 +622,19 @@ int main(void) {
           continue;
         }
         if (!dead && CheckCollisionCircleRec(circleObstacles[i].pos, circleObstacles[i].radius, playerRect)) {
-          dead = true;
-          laserActive = false;
-          StopMusicStream(bgm);
-          for (int k = 0; k < maxLaserSounds; k++) {
-            StopSound(laserSounds[k]);
+          if (invincible) {
+            circleObstacles[i].active = false;
+            AddParticles(particles, maxParticles, 15, circleObstacles[i].pos);
+            PlaySound(wallHitSound);
+          } else {
+            dead = true;
+            laserActive = false;
+            StopMusicStream(bgm);
+            for (int k = 0; k < maxLaserSounds; k++) {
+              StopSound(laserSounds[k]);
+            }
+            PlaySound(deathSound);
           }
-          PlaySound(deathSound);
         }
       }
 
@@ -572,13 +651,17 @@ int main(void) {
           continue;
         }
         if (!dead && CheckCollisionCircleRec(bullets[i].pos, 4.0f, playerRect)) {
-          dead = true;
-          laserActive = false;
-          StopMusicStream(bgm);
-          for (int k = 0; k < maxLaserSounds; k++) {
-            StopSound(laserSounds[k]);
+          if (invincible) {
+            bullets[i].active = false;
+          } else {
+            dead = true;
+            laserActive = false;
+            StopMusicStream(bgm);
+            for (int k = 0; k < maxLaserSounds; k++) {
+              StopSound(laserSounds[k]);
+            }
+            PlaySound(deathSound);
           }
-          PlaySound(deathSound);
         }
       }
 
@@ -611,13 +694,15 @@ int main(void) {
               (float)screenHeight
             };
             if (CheckCollisionRecs(laserRect, playerRect)) {
-              dead = true;
-              laserActive = false;
-              StopMusicStream(bgm);
-              for (int k = 0; k < maxLaserSounds; k++) {
-                StopSound(laserSounds[k]);
+              if (!invincible) {
+                dead = true;
+                laserActive = false;
+                StopMusicStream(bgm);
+                for (int k = 0; k < maxLaserSounds; k++) {
+                  StopSound(laserSounds[k]);
+                }
+                PlaySound(deathSound);
               }
-              PlaySound(deathSound);
             }
           }
         }
@@ -682,10 +767,16 @@ int main(void) {
           DrawRectangleRec(obstacles[i].rect, obstacleColor);
       }
 
-      Color itemColor = (Color){80, 200, 120, 255};
       for (int i = 0; i < maxItems; i++) {
-        if (items[i].active)
-          DrawRectangleRec(items[i].rect, itemColor);
+        if (items[i].active) {
+          DrawTexture(laserItemTexture, (int)items[i].rect.x, (int)items[i].rect.y, WHITE);
+        }
+      }
+
+      for (int i = 0; i < maxStarItems; i++) {
+        if (starItems[i].active) {
+          DrawTexture(starItemTexture, (int)starItems[i].rect.x, (int)starItems[i].rect.y, WHITE);
+        }
       }
 
       Color circleColor = (Color){180, 60, 100, 255};
@@ -740,7 +831,9 @@ int main(void) {
         }
       }
 
-      DrawRectangleRec(playerRect, (Color){40, 50, 80, 255});
+      // Draw player with invincibility visual feedback
+      Color playerColor = invincible ? (Color){255, 215, 0, 255} : (Color){40, 50, 80, 255};
+      DrawRectangleRec(playerRect, playerColor);
 
       for (int i = 0; i < maxParticles; i++) {
         if (particles[i].age < 0.0f)
@@ -760,8 +853,14 @@ int main(void) {
       }
 
       DrawText(TextFormat("LASER: %d", laserAmmo), 20, 20, 22, BLACK);
-      DrawText("MOUSE: MOVE", 20, 48, 20, BLACK);
-      DrawText("LEFT CLICK: LASER", 20, 76, 20, BLACK);
+      if (invincible) {
+        DrawText(TextFormat("INVINCIBLE: %.1fs", invincibilityTimer), 20, 48, 22, (Color){255, 215, 0, 255});
+        DrawText("MOUSE: MOVE", 20, 76, 20, BLACK);
+        DrawText("LEFT CLICK: LASER", 20, 104, 20, BLACK);
+      } else {
+        DrawText("MOUSE: MOVE", 20, 48, 20, BLACK);
+        DrawText("LEFT CLICK: LASER", 20, 76, 20, BLACK);
+      }
       const char *dodgedLabel = TextFormat("DODGED: %d", dodgedCount);
       int dodgedWidth = MeasureText(dodgedLabel, 22);
       DrawText(dodgedLabel, screenWidth - dodgedWidth - 20, 20, 22, BLACK);
@@ -782,6 +881,9 @@ int main(void) {
           obstacleSpawnTimer = 0.0f;
           itemSpawnTimer = 0.0f;
           circleSpawnTimer = 0.0f;
+          starSpawnTimer = 0.0f;
+          invincible = false;
+          invincibilityTimer = 0.0f;
           playerX = screenWidth * 0.5f;
           playerY = screenHeight - 80.0f;
           PlayMusicStream(bgm);
@@ -790,6 +892,9 @@ int main(void) {
           }
           for (int i = 0; i < maxItems; i++) {
             items[i].active = false;
+          }
+          for (int i = 0; i < maxStarItems; i++) {
+            starItems[i].active = false;
           }
           for (int i = 0; i < maxCircleObstacles; i++) {
             circleObstacles[i].active = false;
@@ -820,7 +925,10 @@ int main(void) {
   UnloadSound(clickSound);
   UnloadSound(bulletFireSound);
   UnloadSound(deathSound);
+  UnloadSound(itemGetSound);
   UnloadMusicStream(bgm);
+  UnloadTexture(laserItemTexture);
+  UnloadTexture(starItemTexture);
   CloseAudioDevice();
   CloseWindow();
   return 0;
