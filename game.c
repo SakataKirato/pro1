@@ -145,6 +145,8 @@ int main(void) {
   for (int i = 0; i < maxLaserSounds; i++) {
     laserSounds[i] = LoadSound("気弾2.mp3");
   }
+  Sound bulletFireSound = LoadSound("決定ボタンを押す34.mp3");
+  Sound deathSound = LoadSound("チーン1.mp3");
   Music bgm = LoadMusicStream("maou_bgm_8bit27.mp3");
   const float hueSpeed = 100.0f;         // degrees per second for hue shift
   const float transitionDuration = 0.6f; // seconds
@@ -473,7 +475,11 @@ int main(void) {
         if (!dead && CheckCollisionRecs(playerRect, obstacles[i].rect)) {
           dead = true;
           laserActive = false;
-          PlaySound(wallHitSound);
+          StopMusicStream(bgm);
+          for (int k = 0; k < maxLaserSounds; k++) {
+            StopSound(laserSounds[k]);
+          }
+          PlaySound(deathSound);
         }
       }
 
@@ -521,6 +527,7 @@ int main(void) {
                   bullets[j].pos = circleObstacles[i].pos;
                   bullets[j].vel = (Vector2){cosf(rad) * bulletSpeed, sinf(rad) * bulletSpeed};
                   bullets[j].active = true;
+                  PlaySound(bulletFireSound);
                   break;
                 }
               }
@@ -544,7 +551,11 @@ int main(void) {
         if (!dead && CheckCollisionCircleRec(circleObstacles[i].pos, circleObstacles[i].radius, playerRect)) {
           dead = true;
           laserActive = false;
-          PlaySound(wallHitSound);
+          StopMusicStream(bgm);
+          for (int k = 0; k < maxLaserSounds; k++) {
+            StopSound(laserSounds[k]);
+          }
+          PlaySound(deathSound);
         }
       }
 
@@ -563,7 +574,11 @@ int main(void) {
         if (!dead && CheckCollisionCircleRec(bullets[i].pos, 4.0f, playerRect)) {
           dead = true;
           laserActive = false;
-          PlaySound(wallHitSound);
+          StopMusicStream(bgm);
+          for (int k = 0; k < maxLaserSounds; k++) {
+            StopSound(laserSounds[k]);
+          }
+          PlaySound(deathSound);
         }
       }
 
@@ -598,7 +613,11 @@ int main(void) {
             if (CheckCollisionRecs(laserRect, playerRect)) {
               dead = true;
               laserActive = false;
-              PlaySound(wallHitSound);
+              StopMusicStream(bgm);
+              for (int k = 0; k < maxLaserSounds; k++) {
+                StopSound(laserSounds[k]);
+              }
+              PlaySound(deathSound);
             }
           }
         }
@@ -765,6 +784,7 @@ int main(void) {
           circleSpawnTimer = 0.0f;
           playerX = screenWidth * 0.5f;
           playerY = screenHeight - 80.0f;
+          PlayMusicStream(bgm);
           for (int i = 0; i < maxObstacles; i++) {
             obstacles[i].active = false;
           }
@@ -776,6 +796,9 @@ int main(void) {
           }
           for (int i = 0; i < maxBullets; i++) {
             bullets[i].active = false;
+          }
+          for (int i = 0; i < maxTurretLasers; i++) {
+            turretLasers[i].active = false;
           }
         }
       }
@@ -795,6 +818,8 @@ int main(void) {
   }
   UnloadSound(wallHitSound);
   UnloadSound(clickSound);
+  UnloadSound(bulletFireSound);
+  UnloadSound(deathSound);
   UnloadMusicStream(bgm);
   CloseAudioDevice();
   CloseWindow();
