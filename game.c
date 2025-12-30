@@ -67,6 +67,16 @@ typedef struct TurretLaser {
   bool firing;
 } TurretLaser;
 
+typedef struct ZigzagTriangle {
+  Vector2 pos;
+  float size;
+  float speed;
+  float amplitude;
+  float frequency;
+  float time;
+  bool active;
+} ZigzagTriangle;
+
 static void AddParticles(Particle *particles, int maxParticles, int count,
                          Vector2 pos) {
   for (int i = 0; i < count; i++) {
@@ -131,13 +141,17 @@ int main(void) {
   const int maxBullets = 200;
   Bullet bullets[200];
 
-  const int maxTurrets = 2;
-  Turret turrets[2];
-  const int maxTurretLasers = 2;
-  TurretLaser turretLasers[2];
+  const int maxTurrets = 3;
+  Turret turrets[3];
+  const int maxTurretLasers = 3;
+  TurretLaser turretLasers[3];
   const float turretLaserWidth = 40.0f;
   const float turretWarningTime = 1.0f;
   const float turretFireTime = 0.5f;
+
+  const int maxZigzagTriangles = 15;
+  ZigzagTriangle zigzagTriangles[15];
+  float zigzagSpawnTimer = 0.0f;
 
   bool laserActive = false;
   float laserTimer = 0.0f;
@@ -169,9 +183,12 @@ int main(void) {
   bool transitioning = false;
   bool fadeOut = true;
   float transitionAlpha = 0.0f;
+  bool loading = false;
+  float loadingProgress = 0.0f;
+  const float loadingDuration = 1.5f;
   bool dead = false;
   float runTime = 0.0f;
-  int dodgedCount = 0;
+  float highScore = 0.0f;
 
   for (int i = 0; i < maxParticles; i++) {
     particles[i].age = -1.0f;
@@ -206,22 +223,24 @@ int main(void) {
   for (int i = 0; i < maxTurretLasers; i++) {
     turretLasers[i].active = false;
   }
+  for (int i = 0; i < maxZigzagTriangles; i++) {
+    zigzagTriangles[i].active = false;
+  }
 
 
   while (!WindowShouldClose()) {
     Vector2 mouse = GetMousePosition();
     bool hovered =
-        !inGame && !transitioning && CheckCollisionPointRec(mouse, startButton);
+        !inGame && !transitioning && !loading && CheckCollisionPointRec(mouse, startButton);
     bool pressed = hovered && IsMouseButtonDown(MOUSE_LEFT_BUTTON);
-    if (!inGame && !transitioning && hovered &&
+    if (!inGame && !transitioning && !loading && hovered &&
         IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
       PlaySound(clickSound);
-      transitioning = true;
-      fadeOut = true;
-      transitionAlpha = 0.0f;
+      loading = true;
+      loadingProgress = 0.0f;
       dead = false;
       runTime = 0.0f;
-      dodgedCount = 0;
+      // High score is persistent across games
       laserAmmo = 0;
       laserActive = false;
       laserTimer = 0.0f;
@@ -232,9 +251,7 @@ int main(void) {
       starSpawnTimer = 0.0f;
       invincible = false;
       invincibilityTimer = 0.0f;
-      playerX = screenWidth * 0.5f;
       playerY = screenHeight - 80.0f;
-      PlayMusicStream(bgm);
       for (int i = 0; i < maxObstacles; i++) {
         obstacles[i].active = false;
       }
@@ -250,9 +267,25 @@ int main(void) {
       for (int i = 0; i < maxBullets; i++) {
         bullets[i].active = false;
       }
+      for (int i = 0; i < maxZigzagTriangles; i++) {
+        zigzagTriangles[i].active = false;
+      }
     }
 
     float dt = GetFrameTime();
+    
+    if (loading) {
+      loadingProgress += dt / loadingDuration;
+      if (loadingProgress >= 1.0f) {
+        loading = false;
+        loadingProgress = 1.0f;
+        transitioning = true;
+        fadeOut = true;
+        transitionAlpha = 0.0f;
+        PlayMusicStream(bgm);
+      }
+    }
+    
     if (transitioning) {
       float delta = dt / transitionDuration;
       if (fadeOut) {
@@ -342,6 +375,57 @@ int main(void) {
                (int)(startButton.x + (buttonWidth - startTextWidth) / 2),
                (int)(startButton.y + (buttonHeight - startTextSize) / 2),
                startTextSize, WHITE);
+      
+      // Draw loading screen
+      if (loading) {
+        // Semi-transparent dark overlay
+        DrawRectangle(0, 0, screenWidth, screenHeight, (Color){0, 0, 0, 200});
+        
+        // Animated loading text with dots
+        int dotCount = ((int)(loadingProgress * 12.0f)) % 4;
+        const char *loadingTexts[] = {"LOADING", "LOADING.", "LOADING..", "LOADING..."};
+        const char *loadingText = loadingTexts[dotCount];
+        int loadingFontSize = 48;
+        int loadingTextWidth = MeasureText(loadingText, loadingFontSize);
+        DrawText(loadingText, (screenWidth - loadingTextWidth) / 2, 
+                 screenHeight / 2 - 80, loadingFontSize, WHITE);
+        
+        // Progress bar
+        int barWidth = 400;
+        int barHeight = 30;
+        int barX = (screenWidth - barWidth) / 2;
+        int barY = screenHeight / 2;
+        
+        // Progress bar background
+        DrawRectangle(barX, barY, barWidth, barHeight, (Color){40, 40, 50, 255});
+        
+        // Progress bar fill with gradient effect
+        int fillWidth = (int)(barWidth * loadingProgress);
+        float hue = fmodf((float)GetTime() * 120.0f, 360.0f);
+        Color fillColor = ColorFromHSV(hue, 0.7f, 0.9f);
+        DrawRectangle(barX, barY, fillWidth, barHeight, fillColor);
+        
+        // Progress bar border
+        DrawRectangleLines(barX, barY, barWidth, barHeight, WHITE);
+        
+        // Spinning circle animation
+        float angle = (float)GetTime() * 180.0f;
+        int circleX = screenWidth / 2;
+        int circleY = screenHeight / 2 + 80;
+        for (int i = 0; i < 8; i++) {
+          float a = (angle + i * 45.0f) * DEG2RAD;
+          float x = circleX + cosf(a) * 30.0f;
+          float y = circleY + sinf(a) * 30.0f;
+          float alpha = 255.0f * (1.0f - (float)i / 8.0f);
+          DrawCircle((int)x, (int)y, 5, (Color){255, 255, 255, (unsigned char)alpha});
+        }
+        
+        // Percentage text
+        const char *percentText = TextFormat("%.0f%%", loadingProgress * 100.0f);
+        int percentWidth = MeasureText(percentText, 24);
+        DrawText(percentText, (screenWidth - percentWidth) / 2, 
+                 barY + barHeight + 15, 24, WHITE);
+      }
     } else {
       ClearBackground(WHITE);
 
@@ -400,7 +484,7 @@ int main(void) {
               break;
             }
           }
-          obstacleSpawnTimer = 0.16f + (float)GetRandomValue(0, 25) / 100.0f;
+          obstacleSpawnTimer = 0.10f + (float)GetRandomValue(0, 20) / 100.0f;
         }
 
         itemSpawnTimer -= dt;
@@ -451,6 +535,25 @@ int main(void) {
             }
           }
           circleSpawnTimer = 5.0f + (float)GetRandomValue(0, 150) / 100.0f;
+        }
+
+        zigzagSpawnTimer -= dt;
+        if (zigzagSpawnTimer <= 0.0f) {
+          for (int i = 0; i < maxZigzagTriangles; i++) {
+            if (!zigzagTriangles[i].active) {
+              float size = (float)GetRandomValue(15, 25);
+              float x = (float)GetRandomValue((int)size, screenWidth - (int)size);
+              zigzagTriangles[i].pos = (Vector2){x, -size};
+              zigzagTriangles[i].size = size;
+              zigzagTriangles[i].speed = (float)GetRandomValue(100, 180);
+              zigzagTriangles[i].amplitude = (float)GetRandomValue(100,600);
+              zigzagTriangles[i].frequency = (float)GetRandomValue(200, 400) / 100.0f;
+              zigzagTriangles[i].time = 0.0f;
+              zigzagTriangles[i].active = true;
+              break;
+            }
+          }
+          zigzagSpawnTimer = 1.5f + (float)GetRandomValue(0, 200) / 100.0f;
         }
 
         // Update turrets
@@ -507,8 +610,6 @@ int main(void) {
             obstacles[i].rect.x < -obstacles[i].rect.width * 2 ||
             obstacles[i].rect.x > screenWidth + obstacles[i].rect.width * 2) {
           obstacles[i].active = false;
-          if (!dead)
-            dodgedCount++;
           continue;
         }
         if (!dead && CheckCollisionRecs(playerRect, obstacles[i].rect)) {
@@ -521,6 +622,9 @@ int main(void) {
           } else {
             dead = true;
             laserActive = false;
+            if (runTime > highScore) {
+              highScore = runTime;
+            }
             StopMusicStream(bgm);
             for (int k = 0; k < maxLaserSounds; k++) {
               StopSound(laserSounds[k]);
@@ -629,6 +733,9 @@ int main(void) {
           } else {
             dead = true;
             laserActive = false;
+            if (runTime > highScore) {
+              highScore = runTime;
+            }
             StopMusicStream(bgm);
             for (int k = 0; k < maxLaserSounds; k++) {
               StopSound(laserSounds[k]);
@@ -637,6 +744,59 @@ int main(void) {
           }
         }
       }
+
+      for (int i = 0; i < maxZigzagTriangles; i++) {
+        if (!zigzagTriangles[i].active)
+          continue;
+        if (!dead) {
+          // Update vertical position
+          zigzagTriangles[i].pos.y += zigzagTriangles[i].speed * dt;
+          // Update horizontal position with sine wave
+          zigzagTriangles[i].time += dt;
+          zigzagTriangles[i].pos.x += sinf(zigzagTriangles[i].time * zigzagTriangles[i].frequency) * 
+                                       zigzagTriangles[i].amplitude * dt;
+          // Keep triangle within screen bounds
+          if (zigzagTriangles[i].pos.x < zigzagTriangles[i].size) {
+            zigzagTriangles[i].pos.x = zigzagTriangles[i].size;
+          }
+          if (zigzagTriangles[i].pos.x > screenWidth - zigzagTriangles[i].size) {
+            zigzagTriangles[i].pos.x = screenWidth - zigzagTriangles[i].size;
+          }
+        }
+        if (zigzagTriangles[i].pos.y > screenHeight + zigzagTriangles[i].size * 2) {
+          zigzagTriangles[i].active = false;
+          continue;
+        }
+        // Triangle collision detection with player
+        if (!dead) {
+          // Simple bounding box collision for triangle
+          Rectangle triangleBounds = {
+            zigzagTriangles[i].pos.x - zigzagTriangles[i].size,
+            zigzagTriangles[i].pos.y - zigzagTriangles[i].size,
+            zigzagTriangles[i].size * 2,
+            zigzagTriangles[i].size * 2
+          };
+          if (CheckCollisionRecs(playerRect, triangleBounds)) {
+            if (invincible) {
+              zigzagTriangles[i].active = false;
+              AddParticles(particles, maxParticles, 12, zigzagTriangles[i].pos);
+              PlaySound(wallHitSound);
+            } else {
+              dead = true;
+              laserActive = false;
+              if (runTime > highScore) {
+                highScore = runTime;
+              }
+              StopMusicStream(bgm);
+              for (int k = 0; k < maxLaserSounds; k++) {
+                StopSound(laserSounds[k]);
+              }
+              PlaySound(deathSound);
+            }
+          }
+        }
+      }
+
 
       for (int i = 0; i < maxBullets; i++) {
         if (!bullets[i].active)
@@ -656,6 +816,9 @@ int main(void) {
           } else {
             dead = true;
             laserActive = false;
+            if (runTime > highScore) {
+              highScore = runTime;
+            }
             StopMusicStream(bgm);
             for (int k = 0; k < maxLaserSounds; k++) {
               StopSound(laserSounds[k]);
@@ -697,6 +860,9 @@ int main(void) {
               if (!invincible) {
                 dead = true;
                 laserActive = false;
+                if (runTime > highScore) {
+                  highScore = runTime;
+                }
                 StopMusicStream(bgm);
                 for (int k = 0; k < maxLaserSounds; k++) {
                   StopSound(laserSounds[k]);
@@ -759,6 +925,21 @@ int main(void) {
             bullets[i].active = false;
           }
         }
+        for (int i = 0; i < maxZigzagTriangles; i++) {
+          if (!zigzagTriangles[i].active)
+            continue;
+          Rectangle triangleBounds = {
+            zigzagTriangles[i].pos.x - zigzagTriangles[i].size,
+            zigzagTriangles[i].pos.y - zigzagTriangles[i].size,
+            zigzagTriangles[i].size * 2,
+            zigzagTriangles[i].size * 2
+          };
+          if (CheckCollisionRecs(beamRect, triangleBounds)) {
+            zigzagTriangles[i].active = false;
+            AddParticles(particles, maxParticles, 12, zigzagTriangles[i].pos);
+            PlaySound(wallHitSound);
+          }
+        }
       }
 
       Color obstacleColor = (Color){50, 60, 80, 255};
@@ -784,6 +965,17 @@ int main(void) {
         if (circleObstacles[i].active)
           DrawCircleV(circleObstacles[i].pos, circleObstacles[i].radius, circleColor);
       }
+
+      Color triangleColor = (Color){50, 200, 80, 255};
+      for (int i = 0; i < maxZigzagTriangles; i++) {
+        if (zigzagTriangles[i].active) {
+          Vector2 v1 = {zigzagTriangles[i].pos.x, zigzagTriangles[i].pos.y - zigzagTriangles[i].size};
+          Vector2 v2 = {zigzagTriangles[i].pos.x - zigzagTriangles[i].size, zigzagTriangles[i].pos.y + zigzagTriangles[i].size};
+          Vector2 v3 = {zigzagTriangles[i].pos.x + zigzagTriangles[i].size, zigzagTriangles[i].pos.y + zigzagTriangles[i].size};
+          DrawTriangle(v1, v2, v3, triangleColor);
+        }
+      }
+
 
       Color bulletColor = (Color){220, 80, 80, 255};
       for (int i = 0; i < maxBullets; i++) {
@@ -861,9 +1053,15 @@ int main(void) {
         DrawText("MOUSE: MOVE", 20, 48, 20, BLACK);
         DrawText("LEFT CLICK: LASER", 20, 76, 20, BLACK);
       }
-      const char *dodgedLabel = TextFormat("DODGED: %d", dodgedCount);
-      int dodgedWidth = MeasureText(dodgedLabel, 22);
-      DrawText(dodgedLabel, screenWidth - dodgedWidth - 20, 20, 22, BLACK);
+      // Display survival time
+      const char *timeLabel = TextFormat("TIME: %.1fs", runTime);
+      int timeWidth = MeasureText(timeLabel, 22);
+      DrawText(timeLabel, screenWidth - timeWidth - 20, 20, 22, BLACK);
+      
+      // Display high score
+      const char *highScoreLabel = TextFormat("BEST: %.1fs", highScore);
+      int highScoreWidth = MeasureText(highScoreLabel, 22);
+      DrawText(highScoreLabel, screenWidth - highScoreWidth - 20, 48, 22, (Color){200, 100, 0, 255});
 
       if (dead) {
         DrawText("GAME OVER", screenWidth / 2 - 140, screenHeight / 2 - 40,
@@ -873,7 +1071,7 @@ int main(void) {
         if (IsKeyPressed(KEY_R)) {
           dead = false;
           runTime = 0.0f;
-          dodgedCount = 0;
+          // High score persists
           laserAmmo = 0;
           laserActive = false;
           laserTimer = 0.0f;
@@ -904,6 +1102,9 @@ int main(void) {
           }
           for (int i = 0; i < maxTurretLasers; i++) {
             turretLasers[i].active = false;
+          }
+          for (int i = 0; i < maxZigzagTriangles; i++) {
+            zigzagTriangles[i].active = false;
           }
         }
       }
